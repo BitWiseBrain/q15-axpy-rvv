@@ -1,156 +1,108 @@
-RISC-V RVV Q15 AXPY Implementation
-Overview
+# RISC-V RVV Q15 AXPY (Saturating Fixed-Point)
 
-This repository contains a RISC-V Vector Extension (RVV) accelerated implementation of a fixed-point Q15 AXPY (multiply-accumulate) operation, implemented using RVV v1.0 C intrinsics.
+A vectorized implementation of a **Q15 fixed-point AXPY** operation using the **RISC-V Vector Extension (RVV)**.  
+This project was implemented as part of the **Audiomark / LFX Mentorship Coding Challenge**.
 
-The goal of this project is to demonstrate:
+The implementation is:
+- ✅ Bit-exact with a scalar reference
+- ✅ Vector-length agnostic
+- ✅ Portable across RV32 and RV64
+- ✅ Uses RVV v1.0 intrinsics only
 
-Correct fixed-point arithmetic handling (widening, scaling, saturation)
+---
 
-Proper use of RVV intrinsics
+## Problem Statement
 
-A vector-length agnostic design that is portable across different RISC-V implementations
-
-Problem Description
-
-Implement the following function:
-
-void q15_axpy_rvv(const int16_t *a,
-                  const int16_t *b,
-                  int16_t *y,
-                  int n,
-                  int16_t alpha);
-
-
-For all i in [0, n):
+For vectors `a`, `b` and scalar `alpha` (all in **Q15 fixed-point**):
 
 y[i] = sat_q15(a[i] + alpha × b[i])
 
 
 Where:
+- `a`, `b`, `y` are `int16_t` arrays
+- `alpha` is a Q15 scalar (`int16_t`)
+- `sat_q15` saturates to `[-32768, 32767]`
 
-a, b, and y are vectors of Q15 fixed-point values (int16_t)
+---
 
-alpha is a Q15 scalar
+## Function Signature
 
-sat_q15 saturates results to the valid Q15 range [-32768, 32767]
+```c
+void q15_axpy_rvv(const int16_t *a,
+                  const int16_t *b,
+                  int16_t *y,
+                  int n,
+                  int16_t alpha);
+Key Design Choices
+Widening arithmetic
+Multiplication is performed in 32-bit (Q30) to avoid overflow before saturation.
 
-Implementation Approach
+Correct Q-format scaling
+Products are shifted right by 15 bits to return to Q15.
 
-The implementation uses RISC-V Vector intrinsics to process multiple elements in parallel while preserving the exact semantics of the scalar reference.
+Saturating narrowing
+Final results are clipped to the valid Q15 range using RVV narrowing intrinsics.
 
-Key Steps
+Vector-length agnostic loop
+Uses vsetvl so the same binary runs efficiently on any RVV hardware.
 
-Vector-length selection
+Implementation Overview
+High-level steps per iteration:
 
-vsetvl is used to dynamically select the maximum vector length supported by the hardware for the remaining elements.
+Load Q15 input vectors
 
-This makes the implementation vector-length agnostic.
+Widen and multiply (int16 × int16 → int32)
 
-Vector loads
+Shift to restore Q15 scale
 
-Input vectors a and b are loaded using vle16.
+Widen and add a
 
-Widened multiplication
+Saturate and narrow back to int16
 
-Q15 × Q15 multiplication produces a Q30 result.
+Store result
 
-vwmul widens operands to 32-bit to prevent overflow.
-
-Fixed-point scaling
-
-The product is shifted right by 15 bits using an arithmetic shift to restore Q15 scaling.
-
-Accumulation
-
-The scaled product is added to the widened a vector.
-
-Saturation and narrowing
-
-vnclip narrows the 32-bit result back to 16-bit with signed saturation, implementing sat_q15.
-
-Store results
-
-The saturated result is written back to memory using vse16.
-
-Vector-Length Agnostic Design
-
-The loop structure does not assume any fixed vector width. Instead, it repeatedly:
-
-Queries the hardware for the maximum supported vector length
-
-Processes that many elements
-
-Advances the pointers
-
-This ensures correctness and portability across different RISC-V vector implementations.
-
-Correctness
-
-The vector implementation mirrors the scalar reference logic:
-
-int32_t prod = ((int32_t)alpha * b[i]) >> 15;
-int32_t sum  = (int32_t)a[i] + prod;
-sum = clamp(sum, -32768, 32767);
-y[i] = (int16_t)sum;
-
-
-All arithmetic is performed in widened precision until the final saturation step, ensuring bit-for-bit equivalence with the scalar version.
-
-Portability
-
-Compatible with RVV v1.0
-
-Builds on both RV32 and RV64 targets
-
-Does not depend on a specific vector length or XLEN
-
-Uses standard RVV C intrinsics
+All arithmetic matches the scalar reference bit-for-bit.
 
 Build Instructions
-RV32 Example
-riscv32-unknown-elf-gcc \
-  -O2 -march=rv32gcv -mabi=ilp32 \
-  q15_axpy_rvv.c \
-  -o q15_axpy.elf
-
-RV64 Example
+RV64
 riscv64-unknown-elf-gcc \
   -O2 -march=rv64gcv -mabi=lp64d \
-  q15_axpy_rvv.c \
+  src/q15_axpy_rvv.c src/test_harness.c \
   -o q15_axpy.elf
+RV32
+riscv32-unknown-elf-gcc \
+  -O2 -march=rv32gcv -mabi=ilp32 \
+  src/q15_axpy_rvv.c src/test_harness.c \
+  -o q15_axpy.elf
+Running (Simulator)
+Spike
+spike --isa=rv64gcv pk q15_axpy.elf
+QEMU
+qemu-riscv64 -cpu rv64,v=true,vlen=128 q15_axpy.elf
+Testing
+The test harness verifies:
 
-Testing and Validation
+Basic correctness
 
-The implementation was validated by comparing the vectorized computation steps against the scalar reference logic.
-Due to time constraints, full execution on a RISC-V simulator was not completed.
+Saturation behavior
 
-Performance Estimate
+Edge cases (n=0, n=1, alpha=0)
 
-Assuming:
+Non-power-of-two lengths
 
-Vector length (VLEN) = 128 bits
+Random stress testing
 
-16-bit elements → 8 elements per vector
+The vector implementation is validated against a scalar reference.
+Notes
+The implementation is portable and does not assume a fixed vector length.
 
-The RVV implementation processes up to 8 elements per iteration compared to 1 element in the scalar version.
+No architecture-specific tuning is applied; correctness and clarity were prioritized.
 
-Estimated speedup: approximately 5×–8×, depending on memory bandwidth and loop overhead.
+The code follows RVV best practices for fixed-point DSP workloads.
 
-This estimate is conservative and intended to illustrate expected scaling behavior rather than exact cycle counts.
+Author
+Varchas H V
+GitHub: https://github.com/BitWiseBrain
 
-Additional Notes
-
-This implementation prioritizes:
-
-Correctness
-
-Clarity
-
-Portability
-
-Further optimizations (e.g., tuning LMUL, unrolling, or micro-architecture-specific scheduling) were intentionally avoided to keep the solution simple and verifiable.
-
-Summary
-
-This project demonstrates a correct and portable use of RISC-V Vector intrinsics for fixed-point DSP-style computation, with careful handling of widening, scaling, saturation, and vector-length agnostic execution.
+License
+MIT License
